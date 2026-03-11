@@ -34,7 +34,7 @@ class EvidenceBuilderService
                 continue;
             }
             
-            // Proses Mengambil bobot keyakinan dari rule
+            // Proses Mengambil bobot keyakinan dari aturan
             // Tujuannya untuk Menentukan seberapa kuat gejala mendukung penyakit
             $wRel = (float) $rule['bobot_keyakinan'];
 
@@ -83,7 +83,7 @@ class EvidenceBuilderService
          * Menyesuaikan semua nilai agar tetap valid secara matematis.
          *
          * Tujuan:
-         * Dalam teori Dempster-Shafer total massa tidak boleh melebihi 1.
+         * Dalam teori Dempster Shafer total massa tidak boleh melebihi 1.
          */
         if ($total > 1.0) {
             foreach ($mass as $k => $v) {
@@ -96,7 +96,7 @@ class EvidenceBuilderService
          * Proses Menstabilkan nilai floating
          *
          * Fungsi:
-         * Menghindari kesalahan pembulatan angka komputer.
+         * Menghindari kesalahan pembulatan angka perhitungan.
          *
          * Tujuan:
          * Menjaga hasil perhitungan tetap akurat.
@@ -112,7 +112,7 @@ class EvidenceBuilderService
          *
          * Tujuan:
          * Dalam kondisi nyata, tidak semua gejala langsung
-         * menentukan penyakit secara pasti.
+         * menentukan penyakit sebenarnya.
          */
         $mass['theta'] = max(0.0, 1.0 - $total);
 

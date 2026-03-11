@@ -134,7 +134,6 @@ class DempsterShaferService
         $sumUnion = array_sum($union);
 
         if ($sumUnion <= 0.0) {
-            // benar-benar tidak ada informasi lain -> fallback ke theta
             return ['theta' => 1.0];
         }
 

@@ -27,10 +27,6 @@ class KonsultasiController extends Controller
 
     /**
      * Jalankan diagnosa berdasarkan daftar gejala.
-     *
-     * Request body:
-     * - gejala: array of { id, nama_gejala }
-     * - pengguna_id: (optional) string
      */
     public function diagnose(Request $request)
     {
