@@ -150,8 +150,8 @@ class KonsultasiController extends Controller
                 $konsultasiId,
                 ID::unique(),
                 [
-                    // 'idPengguna'               => $penggunaId,
-                    'pengguna'               => $penggunaId,
+                    'idPengguna'               => $penggunaId,
+                    // 'pengguna'               => $penggunaId,
                     'daftar_gejala'          => $selectedGejala,
                     'hasil_diagnosis'        => $hasilPenyakitNama,
                     'persentase_hasil'       => $persentaseHasil,
