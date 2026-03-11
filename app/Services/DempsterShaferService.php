@@ -5,96 +5,184 @@ namespace App\Services;
 class DempsterShaferService
 {
     /**
-     * Kombinasi dua mass function m1 ⊕ m2
-     * Pendekatan singleton sesuai teori Dempster-Shafer.
+     * Proses Menggabungkan dua evidence menggunakan aturan Dempster
+     *
+     * Fungsi:
+     * Menggabungkan keyakinan dari dua gejala yang berbeda.
+     *
+     * Tujuan:
+     * Mendapatkan tingkat keyakinan baru yang lebih kuat terhadap
+     * suatu penyakit berdasarkan beberapa gejala.
      */
 
     public function combine(array $m1, array $m2): array
     {
-        $result = [];
-        $K = 0.0;
+    // Proses Menyimpan hasil kombinasi evidence
+    // Tujuannya untuk Menyimpan nilai keyakinan akhir setiap penyakit
+    $result = [];
 
-        foreach ($m1 as $h1 => $v1) {
-            foreach ($m2 as $h2 => $v2) {
+    // Proses Menyimpan nilai konflik antar evidence
+    // Tujuannya untuk Mengetahui seberapa besar gejala saling bertentangan
 
-                $product = $v1 * $v2;
+    $conflict = 0.0;
 
-                if ($product <= 0.0) {
-                    continue;
-                }
+    foreach ($m1 as $h1 => $v1) {
+        foreach ($m2 as $h2 => $v2) {
 
-                /**
-                 * mengkonversi hipotesis menjadi himpunan
-                 */
-                $set1 = ($h1 === 'theta') ? ['theta'] : explode(',', $h1);
-                $set2 = ($h2 === 'theta') ? ['theta'] : explode(',', $h2);
+            /**
+            * Proses Mengalikan massa evidence
+            *
+            * Fungsi:
+            * Menggabungkan kekuatan keyakinan dari dua gejala.
+            *
+            * Tujuan:
+            * Menghitung kontribusi kedua gejala terhadap diagnosis.
+            */
+            $product = $v1 * $v2;
 
-                /**
-                 * Jika salah satu theta menjadi hasil adalah himpunan lain
-                 */
-                if ($h1 === 'theta') {
-                    $intersection = $set2;
-                } elseif ($h2 === 'theta') {
-                    $intersection = $set1;
-                } else {
-                    $intersection = array_values(array_intersect($set1, $set2));
-                }
-
-                /**
-                 * Apabila irisan kosong menjadi konflik
-                 */
-                if (empty($intersection)) {
-                    $K += $product;
-                    continue;
-                }
-
-                sort($intersection);
-                $key = implode(',', $intersection);
-
-                $result[$key] = ($result[$key] ?? 0.0) + $product;
+            if ($product == 0) {
+                continue;
             }
+
+            $set1 = $h1 === 'theta' ? ['theta'] : explode(',', $h1);
+            $set2 = $h2 === 'theta' ? ['theta'] : explode(',', $h2);
+
+            /**
+            * Proses Menghitung irisan hipotesis
+            *
+            * Fungsi:
+            * Menentukan penyakit yang didukung oleh kedua evidence.
+            *
+            * Tujuan:
+            * Memperkuat diagnosis jika dua gejala mendukung penyakit yang sama.
+            */
+            if ($h1 === 'theta') {
+                $intersection = $set2;
+            } elseif ($h2 === 'theta') {
+                $intersection = $set1;
+            } else {
+                $intersection = array_intersect($set1, $set2);
+            }
+
+            /**
+            * Proses Menghitung konflik evidence
+            *
+            * Fungsi:
+            * Mengukur pertentangan antara dua gejala.
+            *
+            * Tujuan:
+            * Jika dua gejala mendukung penyakit berbeda,
+            * maka terjadi konflik informasi.
+            */
+            if (empty($intersection)) {
+                $conflict += $product;
+                continue;
+            }
+
+            sort($intersection);
+            $key = implode(',', $intersection);
+
+            /**
+            * Proses Menyimpan hasil kombinasi
+            *
+            * Fungsi:
+            * Menambahkan kontribusi evidence terhadap penyakit.
+            *
+            * Tujuan:
+            * Mengakumulasi keyakinan dari berbagai gejala.
+            */
+            $result[$key] = ($result[$key] ?? 0) + $product;
+        }
+    }
+
+    /**
+    * Proses Menghitung faktor normalisasi
+    *
+    * Fungsi:
+    * Menghilangkan pengaruh konflik dalam hasil akhir.
+    *
+    * Tujuan:
+    * Agar total keyakinan tetap valid.
+    */
+    $normalizer = 1 - $conflict;
+
+    /**
+    * Proses Menangani konflik total
+    *
+    * Fungsi:
+    * Jika semua evidence bertentangan, sistem tetap memberikan
+    * kemungkinan diagnosis.
+    *
+    * Tujuan:
+    * Menghindari kondisi sistem tidak memberikan hasil.
+    */
+    if ($normalizer <= 0) {
+        $union = [];
+        foreach ($m1 as $k => $v) {
+            if ($k === 'theta') {
+                continue;
+            }
+            $union[$k] = ($union[$k] ?? 0.0) + $v;
+        }
+        foreach ($m2 as $k => $v) {
+            if ($k === 'theta') {
+                continue;
+            }
+            $union[$k] = ($union[$k] ?? 0.0) + $v;
         }
 
-        /**
-         * Menyatukan konflik agar stabil numerik
-         */
-        $K = min(max($K, 0.0), 1.0);
+        $sumUnion = array_sum($union);
 
-        /**
-         * Apabila konflik sangat tinggi menjadi ketidakpastian penuh
-         */
-        if ($K >= 0.999999) {
+        if ($sumUnion <= 0.0) {
+            // benar-benar tidak ada informasi lain -> fallback ke theta
             return ['theta' => 1.0];
         }
 
-        $normalizer = 1.0 - $K;
-
         /**
-         * Menghindari pembagian 0
-         */
-        if ($normalizer <= 0.0) {
-            return ['theta' => 1.0];
+        * Proses Redistribusi massa
+        *
+        * Fungsi:
+        * Membagi kembali keyakinan secara proporsional.
+        *
+        * Tujuan:
+        * Sistem tetap memberikan kemungkinan penyakit.
+        */
+        foreach ($union as $k => $v) {
+            $union[$k] = $v / $sumUnion;
         }
 
-        /**
-         * Normalisasikan hasil
-         */
+        return $union;
+    }
+
+    /**
+    * Proses Normalisasi hasil kombinasi
+    *
+    * Fungsi:
+    * Menghitung nilai akhir keyakinan penyakit.
+    *
+    * Tujuan:
+    * Menghasilkan distribusi keyakinan yang valid.
+    */
+    foreach ($result as $k => $v) {
+        $result[$k] = $v / $normalizer;
+    }
+
+    /**
+    * Proses Stabilisasi hasil akhir
+    *
+    * Fungsi:
+    * Memastikan total massa sama dengan 1.
+    *
+    * Tujuan:
+    * Menjaga konsistensi perhitungan metode.
+    */
+    $sum = array_sum($result);
+    if ($sum > 0) {
         foreach ($result as $k => $v) {
-            $value = $v / $normalizer;
-            $result[$k] = min(max($value, 0.0), 1.0);
+            $result[$k] = $v / $sum;
         }
+    }
 
-        /**
-         * Memastikan total tetap 1
-         */
-        $sum = array_sum($result);
-
-        if ($sum > 0.0) {
-            foreach ($result as $k => $v) {
-                $result[$k] = $v / $sum;
-            }
-        }
-
-        return $result;
+    return $result;
     }
 }
