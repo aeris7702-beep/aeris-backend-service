@@ -13,7 +13,7 @@ use Appwrite\ID;
 class KonsultasiController extends Controller
 {
     /**
-     * KonsultasiController constructor.
+     * Konstruktor
      *
      * @param  AppwriteService  $appwrite
      * @param  EvidenceBuilderService  $builder
@@ -25,9 +25,6 @@ class KonsultasiController extends Controller
         protected DempsterShaferService $ds
     ) {}
 
-    /**
-     * Jalankan diagnosa berdasarkan daftar gejala.
-     */
     public function diagnose(Request $request)
     {
         $request->validate([
@@ -44,8 +41,8 @@ class KonsultasiController extends Controller
         $konsultasiId      = config('appwrite.konsultasi_collection_id');
         $penyakitColId     = config('appwrite.penyakit_collection_id');
 
-        $combinedMass = null;
-        $selectedGejala = [];
+        $combinedMass = null; // Menyimpan hasil gabungan mass evidence
+        $selectedGejala = []; // Menyimpan daftar nama gejala yang dipilih
 
         foreach ($request->gejala as $item) {
 
@@ -79,8 +76,8 @@ class KonsultasiController extends Controller
                 'message' => 'Tidak ditemukan basis pengetahuan yang sesuai'
             ], 422);
         }
-
-        /** Ambil hasil terbaik */
+        // Proses Mapping Penyakit Setelah Dilakukan Perhitungan dan mendapatkan hasil
+        /** Mengambil hasil terbaik */
         unset($combinedMass['theta']);
         arsort($combinedMass);
         $totalBelief = array_sum($combinedMass);
@@ -122,7 +119,7 @@ class KonsultasiController extends Controller
             }
         }
 
-        /** Mapping kemungkinan diagnosis kedua */
+        /** kemungkinan diagnosis kedua */
         $kemungkinanPenyakitId = $penyakitIds[1] ?? null;
         $kemungkinanPenyakitNama = '-';
         $persentaseKemungkinan = $kemungkinanPenyakitId
@@ -139,7 +136,6 @@ class KonsultasiController extends Controller
 
                 $kemungkinanPenyakitNama = $doc['nama_penyakit'] ?? '-';
             } catch (\Throwable $e) {
-                // ignore
             }
         }
 
@@ -163,7 +159,7 @@ class KonsultasiController extends Controller
         } catch (\Throwable $e) {
         }
 
-        /** Response ke client (Flutter) */
+        /** Response ke flutter */
         return response()->json([
             'hasil_diagnosis' => [
                 'id'   => $hasilPenyakitId,
