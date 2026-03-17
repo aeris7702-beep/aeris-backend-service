@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Services;
+use Illuminate\Support\Facades\Log;
 
 class EvidenceBuilderService
 {
@@ -17,105 +18,55 @@ class EvidenceBuilderService
      */
 
     public function build(array $rules): array
-    {
-        // Proses Menyimpan nilai massa untuk setiap penyakit
-        // Tujuannya untuk Menyimpan tingkat keyakinan terhadap tiap hipotesis penyakit
-        $mass = [];
+{
+    Log::info('EVIDENCE BUILDER - START', [
+        'total_rules' => count($rules)
+    ]);
 
-        // Proses Menghitung total seluruh nilai keyakinan
-        // Tujuannya Digunakan untuk menentukan sisa massa ketidaktahuan (theta)
-        $total = 0.0; // Total massa untuk semua hipotesis penyakit
+    $mass = [];
+    $penyakitSet = [];
+    $maxWeight = 0.0;
 
-        foreach ($rules as $rule) {
-
-            // Proses Validasi data aturan
-            // Tujuannya Memastikan aturan memiliki bobot keyakinan dan penyakit
-            if (!isset($rule['bobot_keyakinan'], $rule['penyakit'])) {
-                continue;
-            }
-            
-            // Proses Mengambil bobot keyakinan dari aturan
-            // Tujuannya untuk Menentukan seberapa kuat gejala mendukung penyakit
-            $wRel = (float) $rule['bobot_keyakinan'];
-
-            // Proses Mengabaikan bobot tidak valid
-            // Tujuannya Menghindari nilai keyakinan yang tidak logis
-            if ($wRel <= 0.0) {
-                continue;
-            }
-
-            // Proses Membatasi nilai maksimal bobot
-            // Tujuannya agar Menjaga nilai tetap dalam rentang teori (0–1)
-            if ($wRel > 1.0) {
-                $wRel = 1.0;
-            }
-
-            // Proses Mengambil ID penyakit
-            // Tujuannya untuk Menentukan penyakit yang didukung oleh gejala
-            $penyakitId = is_array($rule['penyakit'])
-                ? ($rule['penyakit']['$id'] ?? null)
-                : $rule['penyakit'];
-
-            if (!$penyakitId) {
-                continue;
-            }
-
-            /**
-             * Proses Menambahkan massa ke penyakit
-             *
-             * Fungsi:
-             * Memberikan nilai keyakinan pada penyakit tertentu.
-             *
-             * Tujuan:
-             * Menunjukkan bahwa gejala tersebut mendukung penyakit tersebut.
-             */
-            $mass[$penyakitId] = ($mass[$penyakitId] ?? 0.0) + $wRel;
-           
-            // Proses Menjumlahkan total keyakinan
-            // Tujuannya Untuk menghitung sisa massa ketidaktahuan
-            $total += $wRel;
+    foreach ($rules as $rule) {
+        if (!isset($rule['bobot_keyakinan'], $rule['penyakit'])) {
+            continue;
         }
 
-        /**
-         * Proses dalam Normalisasi jika total melebihi 1
-         *
-         * Fungsi:
-         * Menyesuaikan semua nilai agar tetap valid secara matematis.
-         *
-         * Tujuan:
-         * Dalam teori Dempster Shafer total massa tidak boleh melebihi 1.
-         */
-        if ($total > 1.0) {
-            foreach ($mass as $k => $v) {
-                $mass[$k] = $v / $total;
-            }
-            $total = 1.0;
-        }
+        $wRel = (float) $rule['bobot_keyakinan'];
+        if ($wRel <= 0) continue;
 
-        /**
-         * Proses Menstabilkan nilai floating
-         *
-         * Fungsi:
-         * Menghindari kesalahan pembulatan angka perhitungan.
-         *
-         * Tujuan:
-         * Menjaga hasil perhitungan tetap akurat.
-         */
-        $total = min(max($total, 0.0), 1.0);
+        if ($wRel > 1) $wRel = 1;
 
-        /**
-         * Proses Menambahkan massa ketidaktahuan (Theta)
-         *
-         * Fungsi:
-         * Menyimpan bagian keyakinan yang belum bisa dipastikan
-         * ke penyakit tertentu.
-         *
-         * Tujuan:
-         * Dalam kondisi nyata, tidak semua gejala langsung
-         * menentukan penyakit sebenarnya.
-         */
-        $mass['theta'] = max(0.0, 1.0 - $total);
+        $penyakitId = is_array($rule['penyakit'])
+            ? ($rule['penyakit']['$id'] ?? null)
+            : $rule['penyakit'];
 
-        return $mass;
+        if (!$penyakitId) continue;
+
+        $penyakitSet[] = $penyakitId;
+
+        // Ambil bobot terbesar (bukan dijumlah!)
+        $maxWeight = max($maxWeight, $wRel);
     }
+
+    // Jika tidak ada data
+    if (empty($penyakitSet)) {
+        return ['theta' => 1.0];
+    }
+
+    // Buat subset (ini kunci DS)
+    sort($penyakitSet);
+    $key = implode(',', array_unique($penyakitSet));
+
+    $mass[$key] = $maxWeight;
+
+    // Sisanya ke theta
+    $mass['theta'] = 1 - $maxWeight;
+
+    Log::info('EVIDENCE BUILDER - FINAL MASS FUNCTION', [
+        'mass_function' => $mass
+    ]);
+
+    return $mass;
+}
 } 

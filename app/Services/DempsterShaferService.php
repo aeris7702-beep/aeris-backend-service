@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Services;
+use Illuminate\Support\Facades\Log;
 
 class DempsterShaferService
 {
@@ -17,6 +18,10 @@ class DempsterShaferService
 
     public function combine(array $m1, array $m2): array
     {
+                Log::info('DEMPSTER SHAFER - START COMBINATION', [
+            'evidence_1' => $m1,
+            'evidence_2' => $m2
+        ]);
     // Proses Menyimpan hasil kombinasi evidence
     // Tujuannya untuk Menyimpan nilai keyakinan akhir setiap penyakit
     $result = [];
@@ -76,6 +81,12 @@ class DempsterShaferService
             */
             if (empty($intersection)) {
                 $conflict += $product;
+
+                Log::info('DEMPSTER SHAFER - CONFLICT FOUND', [
+                        'hypothesis_1' => $h1,
+                        'hypothesis_2' => $h2,
+                        'product' => $product
+                    ]);
                 continue;
             }
 
@@ -92,6 +103,14 @@ class DempsterShaferService
             * Mengakumulasi keyakinan dari berbagai gejala.
             */
             $result[$key] = ($result[$key] ?? 0) + $product;
+            
+            Log::info('DEMPSTER SHAFER - MASS COMBINED', [
+                    'h1' => $h1,
+                    'h2' => $h2,
+                    'intersection' => $key,
+                    'product' => $product
+                ]);
+        
         }
     }
 
@@ -104,6 +123,10 @@ class DempsterShaferService
     * Tujuan:
     * Agar total keyakinan tetap valid.
     */
+            Log::info('DEMPSTER SHAFER - TOTAL CONFLICT', [
+            'conflict_value' => $conflict
+        ]);
+
     $normalizer = 1 - $conflict;
 
     /**
@@ -117,6 +140,7 @@ class DempsterShaferService
     * Menghindari kondisi sistem tidak memberikan hasil.
     */
     if ($normalizer <= 0) {
+        Log::warning('DEMPSTER SHAFER - TOTAL CONFLICT DETECTED');
         $union = [];
         foreach ($m1 as $k => $v) {
             if ($k === 'theta') {
@@ -150,6 +174,10 @@ class DempsterShaferService
             $union[$k] = $v / $sumUnion;
         }
 
+        Log::info('DEMPSTER SHAFER - REDISTRIBUTED MASS', [
+                'result' => $union
+            ]);
+
         return $union;
     }
 
@@ -165,6 +193,9 @@ class DempsterShaferService
     foreach ($result as $k => $v) {
         $result[$k] = $v / $normalizer;
     }
+    Log::info('DEMPSTER SHAFER - RESULT BEFORE FINAL STABILIZATION', [
+    'result' => $result
+    ]);
 
     /**
     * Proses Stabilisasi hasil akhir
@@ -181,6 +212,10 @@ class DempsterShaferService
             $result[$k] = $v / $sum;
         }
     }
+
+    Log::info('DEMPSTER SHAFER - FINAL RESULT', [
+            'mass_function' => $result
+        ]);
 
     return $result;
     }

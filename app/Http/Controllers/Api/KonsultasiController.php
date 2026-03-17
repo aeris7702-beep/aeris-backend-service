@@ -9,16 +9,10 @@ use App\Services\EvidenceBuilderService;
 use App\Services\DempsterShaferService;
 use Appwrite\Query;
 use Appwrite\ID;
+use Illuminate\Support\Facades\Log;
 
 class KonsultasiController extends Controller
 {
-    /**
-     * Konstruktor
-     *
-     * @param  AppwriteService  $appwrite
-     * @param  EvidenceBuilderService  $builder
-     * @param  DempsterShaferService  $ds
-     */
     public function __construct(
         protected AppwriteService $appwrite,
         protected EvidenceBuilderService $builder,
@@ -34,15 +28,20 @@ class KonsultasiController extends Controller
             'pengguna_id' => 'nullable|string',
         ]);
 
+        Log::info('KONSULTASI DIMULAI', [
+            'pengguna_id' => $request->pengguna_id,
+            'gejala' => $request->gejala
+        ]);
+
         $db = $this->appwrite->database();
 
-        $databaseId        = config('appwrite.database_id');
-        $basisColId        = config('appwrite.basis_collection_id');
-        $konsultasiId      = config('appwrite.konsultasi_collection_id');
-        $penyakitColId     = config('appwrite.penyakit_collection_id');
+        $databaseId    = config('appwrite.database_id');
+        $basisColId    = config('appwrite.basis_collection_id');
+        $konsultasiId  = config('appwrite.konsultasi_collection_id');
+        $penyakitColId = config('appwrite.penyakit_collection_id');
 
-        $combinedMass = null; // Menyimpan hasil gabungan mass evidence
-        $selectedGejala = []; // Menyimpan daftar nama gejala yang dipilih
+        $combinedMass = null;
+        $selectedGejala = [];
 
         foreach ($request->gejala as $item) {
 
@@ -76,20 +75,26 @@ class KonsultasiController extends Controller
                 'message' => 'Tidak ditemukan basis pengetahuan yang sesuai'
             ], 422);
         }
-        // Proses Mapping Penyakit Setelah Dilakukan Perhitungan dan mendapatkan hasil
-        /** Mengambil hasil terbaik */
-        unset($combinedMass['theta']);
-        arsort($combinedMass);
-        $totalBelief = array_sum($combinedMass);
+
+        // HITUNG BELIEF 
+        $belief = $this->calculateBelief($combinedMass);
+
+        // Hapus noise
+        $belief = array_filter($belief, fn($v) => $v > 0.0001);
+
+        arsort($belief);
+
+        $totalBelief = array_sum($belief);
         if ($totalBelief <= 0) {
             $totalBelief = 1;
         }
 
-        $penyakitIds = array_keys($combinedMass);
+        $penyakitIds = array_keys($belief);
 
+        // DIAGNOSIS UTAMA
         $hasilPenyakitId = $penyakitIds[0] ?? null;
         $persentaseHasil = $hasilPenyakitId
-            ? round(($combinedMass[$hasilPenyakitId] / $totalBelief) * 100, 2)
+            ? round(($belief[$hasilPenyakitId] / $totalBelief) * 100, 2)
             : 0;
 
         $hasilPenyakitNama = '-';
@@ -115,15 +120,14 @@ class KonsultasiController extends Controller
                     'penanganan'  => $doc['penanganan'] ?? '',
                     'rekomendasi' => $doc['rekomendasi'] ?? '',
                 ];
-            } catch (\Throwable $e) {
-            }
+            } catch (\Throwable $e) {}
         }
 
-        /** kemungkinan diagnosis kedua */
+        // DIAGNOSIS KEDUA
         $kemungkinanPenyakitId = $penyakitIds[1] ?? null;
         $kemungkinanPenyakitNama = '-';
         $persentaseKemungkinan = $kemungkinanPenyakitId
-            ? round(($combinedMass[$kemungkinanPenyakitId] / $totalBelief) * 100, 2)
+            ? round(($belief[$kemungkinanPenyakitId] / $totalBelief) * 100, 2)
             : 0;
 
         if ($kemungkinanPenyakitId) {
@@ -135,11 +139,17 @@ class KonsultasiController extends Controller
                 );
 
                 $kemungkinanPenyakitNama = $doc['nama_penyakit'] ?? '-';
-            } catch (\Throwable $e) {
-            }
+            } catch (\Throwable $e) {}
         }
 
-        /** Simpan konsultasi */
+        Log::info('HASIL DIAGNOSIS', [
+            'utama' => $hasilPenyakitNama,
+            'persen' => $persentaseHasil,
+            'kedua' => $kemungkinanPenyakitNama,
+            'persen_kedua' => $persentaseKemungkinan
+        ]);
+
+        // SIMPAN KE DATABASE
         try {
             $db->createDocument(
                 $databaseId,
@@ -147,19 +157,17 @@ class KonsultasiController extends Controller
                 ID::unique(),
                 [
                     'idPengguna'               => $penggunaId,
-                    // 'pengguna'               => $penggunaId,
-                    'daftar_gejala'          => $selectedGejala,
-                    'hasil_diagnosis'        => $hasilPenyakitNama,
-                    'persentase_hasil'       => $persentaseHasil,
-                    'kemungkinan_diagnosis'  => $kemungkinanPenyakitNama,
-                    'persentase_kemungkinan' => $persentaseKemungkinan,
-                    'tanggal_konsultasi'     => now()->toIso8601String(),
+                    'daftar_gejala'           => $selectedGejala,
+                    'hasil_diagnosis'         => $hasilPenyakitNama,
+                    'persentase_hasil'        => $persentaseHasil,
+                    'kemungkinan_diagnosis'   => $kemungkinanPenyakitNama,
+                    'persentase_kemungkinan'  => $persentaseKemungkinan,
+                    'tanggal_konsultasi'      => now()->toIso8601String(),
                 ]
             );
-        } catch (\Throwable $e) {
-        }
+        } catch (\Throwable $e) {}
 
-        /** Response ke flutter */
+        // RESPONSE
         return response()->json([
             'hasil_diagnosis' => [
                 'id'   => $hasilPenyakitId,
@@ -170,5 +178,27 @@ class KonsultasiController extends Controller
             'persentase_kemungkinan' => $persentaseKemungkinan,
             'detail_penyakit' => $detailPenyakit,
         ]);
+    }
+
+    // FUNGSI BELIEF (WAJIB)
+    private function calculateBelief(array $mass): array
+    {
+        $belief = [];
+
+        foreach ($mass as $hypothesis => $value) {
+            if ($hypothesis === 'theta') continue;
+
+            $parts = explode(',', $hypothesis);
+
+            foreach ($parts as $p) {
+                if (!isset($belief[$p])) {
+                    $belief[$p] = 0;
+                }
+
+                $belief[$p] += $value;
+            }
+        }
+
+        return $belief;
     }
 }
