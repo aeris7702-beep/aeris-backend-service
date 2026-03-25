@@ -45,7 +45,7 @@ class EvidenceBuilderService
 
         $penyakitSet[] = $penyakitId;
 
-        // Ambil bobot terbesar (bukan dijumlah!)
+        // Ambil bobot terbesar
         $maxWeight = max($maxWeight, $wRel);
     }
 

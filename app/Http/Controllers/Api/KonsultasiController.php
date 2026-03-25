@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Services\AppwriteService;
-use App\Services\EvidenceBuilderService;
 use App\Services\DempsterShaferService;
 use Appwrite\Query;
 use Appwrite\ID;
@@ -15,190 +14,189 @@ class KonsultasiController extends Controller
 {
     public function __construct(
         protected AppwriteService $appwrite,
-        protected EvidenceBuilderService $builder,
         protected DempsterShaferService $ds
     ) {}
 
-    public function diagnose(Request $request)
-    {
-        $request->validate([
-            'gejala' => 'required|array|min:1',
-            'gejala.*.id' => 'required|string',
-            'gejala.*.nama_gejala' => 'required|string',
-            'pengguna_id' => 'nullable|string',
-        ]);
+   public function diagnose(Request $request)
+{
+    $request->validate([
+        'gejala' => 'required|array|min:1',
+        'gejala.*.id' => 'required|string',
+        'gejala.*.nama_gejala' => 'required|string',
+        'pengguna_id' => 'nullable|string',
+    ]);
 
-        Log::info('KONSULTASI DIMULAI', [
-            'pengguna_id' => $request->pengguna_id,
-            'gejala' => $request->gejala
-        ]);
+    $db = $this->appwrite->database();
 
-        $db = $this->appwrite->database();
+    $databaseId    = config('appwrite.database_id');
+    $basisColId    = config('appwrite.basis_collection_id');
+    $penyakitColId = config('appwrite.penyakit_collection_id');
+    $konsultasiId  = config('appwrite.konsultasi_collection_id');
 
-        $databaseId    = config('appwrite.database_id');
-        $basisColId    = config('appwrite.basis_collection_id');
-        $konsultasiId  = config('appwrite.konsultasi_collection_id');
-        $penyakitColId = config('appwrite.penyakit_collection_id');
+    $evidences = [];
+    $selectedGejala = [];
 
-        $combinedMass = null;
-        $selectedGejala = [];
+    foreach ($request->gejala as $item) {
 
-        foreach ($request->gejala as $item) {
+        $gejalaId   = $item['id'];
+        $namaGejala = $item['nama_gejala'];
 
-            $gejalaId   = $item['id'];
-            $namaGejala = $item['nama_gejala'];
-            $penggunaId = $request->input('pengguna_id');
+        $selectedGejala[] = $namaGejala;
 
-            $selectedGejala[] = $namaGejala;
+        $response = $db->listDocuments(
+            $databaseId,
+            $basisColId,
+            [Query::equal('gejala', $gejalaId)]
+        );
 
-            $response = $db->listDocuments(
-                $databaseId,
-                $basisColId,
-                [Query::equal('gejala', $gejalaId)]
-            );
+        $rules = $response['documents'] ?? [];
 
-            $rules = $response['documents'] ?? [];
+        if (empty($rules)) continue;
 
-            if (empty($rules)) {
-                continue;
-            }
+        // mapping ke format DS
+        $formattedRules = [];
 
-            $mass = $this->builder->build($rules);
+        foreach ($rules as $rule) {
 
-            $combinedMass = is_null($combinedMass)
-                ? $mass
-                : $this->ds->combine($combinedMass, $mass);
+            $penyakitId = $rule['penyakit'] ?? null;
+
+            if (!$penyakitId) continue;
+
+            $formattedRules[] = [
+                'subset' => [$penyakitId], // bisa dikembangkan multi subset
+                'bobot_keyakinan' => (float)$rule['bobot_keyakinan']
+            ];
         }
 
-        if (empty($combinedMass)) {
-            return response()->json([
-                'message' => 'Tidak ditemukan basis pengetahuan yang sesuai'
-            ], 422);
-        }
+        $mass = $this->ds->buildMass($formattedRules);
+        $evidences[] = $mass;
 
-        // HITUNG BELIEF 
-        $belief = $this->calculateBelief($combinedMass);
+        Log::info("RULES RESULT:", $rules);
+        Log::info("Mass untuk gejala $gejalaId:", $mass);
+        Log::info("Semua evidence:", $evidences);
+    }
 
-        // Hapus noise
-        $belief = array_filter($belief, fn($v) => $v > 0.0001);
-
-        arsort($belief);
-
-        $totalBelief = array_sum($belief);
-        if ($totalBelief <= 0) {
-            $totalBelief = 1;
-        }
-
-        $penyakitIds = array_keys($belief);
-
-        // DIAGNOSIS UTAMA
-        $hasilPenyakitId = $penyakitIds[0] ?? null;
-        $persentaseHasil = $hasilPenyakitId
-            ? round(($belief[$hasilPenyakitId] / $totalBelief) * 100, 2)
-            : 0;
-
-        $hasilPenyakitNama = '-';
-        $detailPenyakit = [
-            'deskripsi'   => '-',
-            'penyebab'    => '-',
-            'penanganan'  => '-',
-            'rekomendasi' => '-',
-        ];
-
-        if ($hasilPenyakitId) {
-            try {
-                $doc = $db->getDocument(
-                    $databaseId,
-                    $penyakitColId,
-                    $hasilPenyakitId
-                );
-
-                $hasilPenyakitNama = $doc['nama_penyakit'] ?? '-';
-                $detailPenyakit = [
-                    'deskripsi'   => $doc['deskripsi'] ?? '',
-                    'penyebab'    => $doc['penyebab'] ?? '',
-                    'penanganan'  => $doc['penanganan'] ?? '',
-                    'rekomendasi' => $doc['rekomendasi'] ?? '',
-                ];
-            } catch (\Throwable $e) {}
-        }
-
-        // DIAGNOSIS KEDUA
-        $kemungkinanPenyakitId = $penyakitIds[1] ?? null;
-        $kemungkinanPenyakitNama = '-';
-        $persentaseKemungkinan = $kemungkinanPenyakitId
-            ? round(($belief[$kemungkinanPenyakitId] / $totalBelief) * 100, 2)
-            : 0;
-
-        if ($kemungkinanPenyakitId) {
-            try {
-                $doc = $db->getDocument(
-                    $databaseId,
-                    $penyakitColId,
-                    $kemungkinanPenyakitId
-                );
-
-                $kemungkinanPenyakitNama = $doc['nama_penyakit'] ?? '-';
-            } catch (\Throwable $e) {}
-        }
-
-        Log::info('HASIL DIAGNOSIS', [
-            'utama' => $hasilPenyakitNama,
-            'persen' => $persentaseHasil,
-            'kedua' => $kemungkinanPenyakitNama,
-            'persen_kedua' => $persentaseKemungkinan
-        ]);
-
-        // SIMPAN KE DATABASE
-        try {
-            $db->createDocument(
-                $databaseId,
-                $konsultasiId,
-                ID::unique(),
-                [
-                    'idPengguna'               => $penggunaId,
-                    'daftar_gejala'           => $selectedGejala,
-                    'hasil_diagnosis'         => $hasilPenyakitNama,
-                    'persentase_hasil'        => $persentaseHasil,
-                    'kemungkinan_diagnosis'   => $kemungkinanPenyakitNama,
-                    'persentase_kemungkinan'  => $persentaseKemungkinan,
-                    'tanggal_konsultasi'      => now()->toIso8601String(),
-                ]
-            );
-        } catch (\Throwable $e) {}
-
-        // RESPONSE
+    if (empty($evidences)) {
         return response()->json([
-            'hasil_diagnosis' => [
-                'id'   => $hasilPenyakitId,
-                'nama_penyakit' => $hasilPenyakitNama,
-            ],
-            'persentase_hasil' => $persentaseHasil,
-            'kemungkinan_diagnosis' => $kemungkinanPenyakitNama,
-            'persentase_kemungkinan' => $persentaseKemungkinan,
-            'detail_penyakit' => $detailPenyakit,
-        ]);
+            'message' => 'Tidak ada evidence yang bisa diproses'
+        ], 422);
     }
 
-    // FUNGSI BELIEF (WAJIB)
-    private function calculateBelief(array $mass): array
-    {
-        $belief = [];
+    // combine semua evidence
+    $result = $this->ds->calculate($evidences);
 
-        foreach ($mass as $hypothesis => $value) {
-            if ($hypothesis === 'theta') continue;
-
-            $parts = explode(',', $hypothesis);
-
-            foreach ($parts as $p) {
-                if (!isset($belief[$p])) {
-                    $belief[$p] = 0;
-                }
-
-                $belief[$p] += $value;
-            }
-        }
-
-        return $belief;
+    while ($result['conflict'] > 0.85 && count($evidences) > 2) {
+        array_pop($evidences); // hapus gejala terakhir
+        $result = $this->ds->calculate($evidences);
     }
+
+
+    if ($result['conflict'] > 0.85) {
+
+    return response()->json([
+            'message' => 'Gejala tidak konsisten, silakan pilih gejala yang lebih relevan',
+            'conflict' => $result['conflict']
+        ], 422);
+    }
+
+    $finalMass = $result['mass'];
+    $conflict  = $result['conflict'];
+
+    // hitung belief
+    $belief = $this->ds->calculateBelief($finalMass);
+
+    if (empty($belief)) {
+        $belief = $this->ds->calculatePlausibility($finalMass);
+    }
+
+    arsort($belief);
+
+    $total = array_sum($belief) ?: 1;
+
+    $penyakitIds = array_keys($belief);
+
+    // HASIL UTAMA
+    $utamaId = $penyakitIds[0] ?? null;
+    $persenUtama = $utamaId
+        ? round(($belief[$utamaId] / $total) * 100, 2)
+        : 0;
+
+    // HASIL KEDUA
+    $keduaId = $penyakitIds[1] ?? null;
+    $persenKedua = $keduaId
+        ? round(($belief[$keduaId] / $total) * 100, 2)
+        : 0;
+
+    // GET DETAIL PENYAKIT
+    $getDetail = function($id) use ($db, $databaseId, $penyakitColId) {
+    try {
+        $doc = $db->getDocument($databaseId, $penyakitColId, $id);
+
+        return [
+            'id' => $id,
+            'kode' => $doc['kode_penyakit'] ?? '',
+            'nama' => $doc['nama_penyakit'] ?? '-',
+            'deskripsi' => $doc['deskripsi'] ?? '',
+            'penyebab' => $doc['penyebab'] ?? '',
+            'penanganan' => $doc['penanganan'] ?? '',
+            'rekomendasi' => $doc['rekomendasi'] ?? '',
+        ];
+    } catch (\Throwable $e) {
+        Log::error("Gagal ambil detail penyakit: " . $e->getMessage());
+        return null;
+    }
+};
+
+$detailPenyakit = [];
+
+$namaUtama = null;
+$namaKedua = null;
+
+if ($utamaId) {
+    $detail = $getDetail($utamaId);
+    if ($detail) {
+        $detailPenyakit[$utamaId] = $detail;
+        $namaUtama = $detail['nama']; // ambil nama
+    }
+}
+
+if ($keduaId && $keduaId !== $utamaId) {
+    $detail = $getDetail($keduaId);
+    if ($detail) {
+        $detailPenyakit[$keduaId] = $detail;
+        $namaKedua = $detail['nama'];
+    }
+}
+
+try {
+    $db->createDocument(
+    $databaseId,
+    $konsultasiId,
+    ID::unique(),
+    [
+        'pengguna_id' => $request->pengguna_id,
+        'gejala_dipilih' => $selectedGejala,
+
+        'hasil_utama' => $namaUtama,
+        'persentase_utama' => $persenUtama,
+
+        'hasil_kedua' => $namaKedua,
+        'persentase_kedua' => $persenKedua,
+
+        'conflict' => $conflict,
+    ]
+);
+} catch (\Throwable $e) {
+    Log::error("Gagal simpan konsultasi: " . $e->getMessage());
+}
+
+   return response()->json([
+    'hasil_utama' => $namaUtama,
+    'persentase_utama' => $persenUtama,
+    'hasil_kedua' => $namaKedua,
+    'persentase_kedua' => $persenKedua,
+    'conflict' => $conflict,
+    'detail_penyakit' => $detailPenyakit,
+]);
+}
 }

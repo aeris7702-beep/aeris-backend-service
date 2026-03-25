@@ -1,222 +1,248 @@
 <?php
 
 namespace App\Services;
-use Illuminate\Support\Facades\Log;
 
 class DempsterShaferService
 {
     /**
-     * Proses Menggabungkan dua evidence menggunakan aturan Dempster
-     *
-     * Fungsi:
-     * Menggabungkan keyakinan dari dua gejala yang berbeda.
-     *
-     * Tujuan:
-     * Mendapatkan tingkat keyakinan baru yang lebih kuat terhadap
-     * suatu penyakit berdasarkan beberapa gejala.
+     * Build Mass Function (SUPPORT SUBSET)
      */
+    public function buildMass(array $rules): array
+    {
+        $mass = [];
+        $total = 0;
 
+        foreach ($rules as $rule) {
+
+            // subset: ['P1'] atau ['P1','P2']
+            $subset = $rule['subset'];
+            sort($subset);
+
+            $key = implode(',', $subset);
+            $bobot = (float) $rule['bobot_keyakinan'];
+
+            if ($bobot < 0) {
+                throw new \Exception("Bobot tidak boleh negatif");
+            }
+
+            if (!isset($mass[$key])) {
+                $mass[$key] = 0;
+            }
+
+            $mass[$key] += $bobot;
+            $total += $bobot;
+        }
+
+        if ($total > 1) {
+            foreach ($mass as $k => $v) {
+                $mass[$k] = $v / $total;
+            }
+            $total = 1;
+        }
+
+        // Θ (ignorance)
+        $mass['theta'] = 1 - $total;
+
+        return $mass;
+    }
+
+    /**
+     * INTERSECTION (FULL SUBSET SUPPORT)
+     */
+    private function intersect($a, $b)
+    {
+        if ($a === 'theta') return $b;
+        if ($b === 'theta') return $a;
+
+        $setA = explode(',', $a);
+        $setB = explode(',', $b);
+
+        $intersect = array_intersect($setA, $setB);
+
+        if (empty($intersect)) return null;
+
+        sort($intersect);
+
+        return implode(',', $intersect);
+    }
+
+    /**
+     * KOMBINASI DEMPSTER + KONFLIK
+     */
     public function combine(array $m1, array $m2): array
     {
-                Log::info('DEMPSTER SHAFER - START COMBINATION', [
-            'evidence_1' => $m1,
-            'evidence_2' => $m2
-        ]);
-    // Proses Menyimpan hasil kombinasi evidence
-    // Tujuannya untuk Menyimpan nilai keyakinan akhir setiap penyakit
-    $result = [];
+        $result = [];
+        $conflict = 0;
 
-    // Proses Menyimpan nilai konflik antar evidence
-    // Tujuannya untuk Mengetahui seberapa besar gejala saling bertentangan
+        foreach ($m1 as $h1 => $v1) {
+            foreach ($m2 as $h2 => $v2) {
 
-    $conflict = 0.0;
+                $intersection = $this->intersect($h1, $h2);
+                $nilai = $v1 * $v2;
 
-    foreach ($m1 as $h1 => $v1) {
-        foreach ($m2 as $h2 => $v2) {
-
-            /**
-            * Proses Mengalikan massa evidence
-            *
-            * Fungsi:
-            * Menggabungkan kekuatan keyakinan dari dua gejala.
-            *
-            * Tujuan:
-            * Menghitung kontribusi kedua gejala terhadap diagnosis.
-            */
-            $product = $v1 * $v2;
-
-            if ($product == 0) {
-                continue;
+                if ($intersection === null) {
+                    $conflict += $nilai;
+                } else {
+                    if (!isset($result[$intersection])) {
+                        $result[$intersection] = 0;
+                    }
+                    $result[$intersection] += $nilai;
+                }
             }
-
-            $set1 = $h1 === 'theta' ? ['theta'] : explode(',', $h1);
-            $set2 = $h2 === 'theta' ? ['theta'] : explode(',', $h2);
-
-            /**
-            * Proses Menghitung irisan hipotesis
-            *
-            * Fungsi:
-            * Menentukan penyakit yang didukung oleh kedua evidence.
-            *
-            * Tujuan:
-            * Memperkuat diagnosis jika dua gejala mendukung penyakit yang sama.
-            */
-            if ($h1 === 'theta') {
-                $intersection = $set2;
-            } elseif ($h2 === 'theta') {
-                $intersection = $set1;
-            } else {
-                $intersection = array_intersect($set1, $set2);
-            }
-
-            /**
-            * Proses Menghitung konflik evidence
-            *
-            * Fungsi:
-            * Mengukur pertentangan antara dua gejala.
-            *
-            * Tujuan:
-            * Jika dua gejala mendukung penyakit berbeda,
-            * maka terjadi konflik informasi.
-            */
-            if (empty($intersection)) {
-                $conflict += $product;
-
-                Log::info('DEMPSTER SHAFER - CONFLICT FOUND', [
-                        'hypothesis_1' => $h1,
-                        'hypothesis_2' => $h2,
-                        'product' => $product
-                    ]);
-                continue;
-            }
-
-            sort($intersection);
-            $key = implode(',', $intersection);
-
-            /**
-            * Proses Menyimpan hasil kombinasi
-            *
-            * Fungsi:
-            * Menambahkan kontribusi evidence terhadap penyakit.
-            *
-            * Tujuan:
-            * Mengakumulasi keyakinan dari berbagai gejala.
-            */
-            $result[$key] = ($result[$key] ?? 0) + $product;
-            
-            Log::info('DEMPSTER SHAFER - MASS COMBINED', [
-                    'h1' => $h1,
-                    'h2' => $h2,
-                    'intersection' => $key,
-                    'product' => $product
-                ]);
-        
-        }
-    }
-
-    /**
-    * Proses Menghitung faktor normalisasi
-    *
-    * Fungsi:
-    * Menghilangkan pengaruh konflik dalam hasil akhir.
-    *
-    * Tujuan:
-    * Agar total keyakinan tetap valid.
-    */
-            Log::info('DEMPSTER SHAFER - TOTAL CONFLICT', [
-            'conflict_value' => $conflict
-        ]);
-
-    $normalizer = 1 - $conflict;
-
-    /**
-    * Proses Menangani konflik total
-    *
-    * Fungsi:
-    * Jika semua evidence bertentangan, sistem tetap memberikan
-    * kemungkinan diagnosis.
-    *
-    * Tujuan:
-    * Menghindari kondisi sistem tidak memberikan hasil.
-    */
-    if ($normalizer <= 0) {
-        Log::warning('DEMPSTER SHAFER - TOTAL CONFLICT DETECTED');
-        $union = [];
-        foreach ($m1 as $k => $v) {
-            if ($k === 'theta') {
-                continue;
-            }
-            $union[$k] = ($union[$k] ?? 0.0) + $v;
-        }
-        foreach ($m2 as $k => $v) {
-            if ($k === 'theta') {
-                continue;
-            }
-            $union[$k] = ($union[$k] ?? 0.0) + $v;
         }
 
-        $sumUnion = array_sum($union);
+        $normalization = 1 - $conflict;
 
-        if ($sumUnion <= 0.0) {
-            return ['theta' => 1.0];
+        if ($normalization == 0) {
+            return [
+                'mass' => ['theta' => 1],
+                'conflict' => 1
+            ];
         }
 
-        /**
-        * Proses Redistribusi massa
-        *
-        * Fungsi:
-        * Membagi kembali keyakinan secara proporsional.
-        *
-        * Tujuan:
-        * Sistem tetap memberikan kemungkinan penyakit.
-        */
-        foreach ($union as $k => $v) {
-            $union[$k] = $v / $sumUnion;
-        }
-
-        Log::info('DEMPSTER SHAFER - REDISTRIBUTED MASS', [
-                'result' => $union
-            ]);
-
-        return $union;
-    }
-
-    /**
-    * Proses Normalisasi hasil kombinasi
-    *
-    * Fungsi:
-    * Menghitung nilai akhir keyakinan penyakit.
-    *
-    * Tujuan:
-    * Menghasilkan distribusi keyakinan yang valid.
-    */
-    foreach ($result as $k => $v) {
-        $result[$k] = $v / $normalizer;
-    }
-    Log::info('DEMPSTER SHAFER - RESULT BEFORE FINAL STABILIZATION', [
-    'result' => $result
-    ]);
-
-    /**
-    * Proses Stabilisasi hasil akhir
-    *
-    * Fungsi:
-    * Memastikan total massa sama dengan 1.
-    *
-    * Tujuan:
-    * Menjaga konsistensi perhitungan metode.
-    */
-    $sum = array_sum($result);
-    if ($sum > 0) {
         foreach ($result as $k => $v) {
-            $result[$k] = $v / $sum;
+            $result[$k] = $v / $normalization;
+        }
+
+        return [
+            'mass' => $result,
+            'conflict' => $conflict
+        ];
+    }
+
+    /**
+     * ITERASI MULTI EVIDENCE
+     */
+    public function calculate(array $evidences): array
+    {
+        if (empty($evidences)) {
+            return [
+                'mass' => [],
+                'conflict' => 0
+            ];
+        }
+
+        $combined = array_shift($evidences);
+        $totalConflict = 0;
+
+        foreach ($evidences as $mass) {
+            $res = $this->combine($combined, $mass);
+
+            $combined = $res['mass'];
+            $totalConflict += $res['conflict'];
+        }
+
+        return [
+            'mass' => $combined,
+            'conflict' => $totalConflict
+        ];
+    }
+
+    public function calculateBelief(array $mass): array
+{
+    $belief = [];
+
+    foreach ($mass as $A => $vA) {
+
+        if ($A === 'theta') continue;
+
+        $setA = explode(',', $A);
+
+        foreach ($mass as $B => $vB) {
+
+            if ($B === 'theta') continue;
+
+            $setB = explode(',', $B);
+
+            // cek apakah B subset dari A
+            if (empty(array_diff($setB, $setA))) {
+                if (!isset($belief[$A])) {
+                    $belief[$A] = 0;
+                }
+
+                $belief[$A] += $vB;
+            }
         }
     }
 
-    Log::info('DEMPSTER SHAFER - FINAL RESULT', [
-            'mass_function' => $result
-        ]);
+    return $belief;
+}
 
-    return $result;
+    /**
+     * PLAUSIBILITY FUNCTION
+     */
+    public function calculatePlausibility(array $mass): array
+    {
+        $pl = [];
+
+        foreach ($mass as $A => $vA) {
+
+            if ($A === 'theta') continue;
+
+            foreach ($mass as $B => $vB) {
+
+                if ($B === 'theta') {
+                    $pl[$A] = ($pl[$A] ?? 0) + $vB;
+                    continue;
+                }
+
+                $intersect = array_intersect(
+                    explode(',', $A),
+                    explode(',', $B)
+                );
+
+                if (!empty($intersect)) {
+                    $pl[$A] = ($pl[$A] ?? 0) + $vB;
+                }
+            }
+        }
+
+        return $pl;
+    }
+
+    /**
+     * MULTI RESULT + THRESHOLD
+     */
+    public function getRanking(array $mass, float $threshold = 0.6): array
+    {
+        unset($mass['theta']);
+
+        if (empty($mass)) {
+            return [
+                'status' => 'tidak_pasti',
+                'data' => []
+            ];
+        }
+
+        arsort($mass);
+
+        $results = [];
+
+        foreach ($mass as $k => $v) {
+            $results[] = [
+                'penyakit' => $k,
+                'nilai' => $v
+            ];
+        }
+
+        // cek threshold
+        $filtered = array_filter($results, function ($r) use ($threshold) {
+            return $r['nilai'] >= $threshold;
+        });
+
+        return [
+            'status' => empty($filtered) ? 'tidak_pasti' : 'ok',
+            'data' => $results
+        ];
+    }
+
+    /**
+     * INTERPRETASI KONFLIK
+     */
+    public function interpretConflict($k)
+    {
+        if ($k < 0.3) return 'rendah';
+        if ($k < 0.7) return 'sedang';
+        return 'tinggi';
     }
 }
