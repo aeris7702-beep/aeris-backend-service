@@ -5,7 +5,8 @@ namespace App\Services;
 class DempsterShaferService
 {
     /**
-     * Build Mass Function (SUPPORT SUBSET)
+     * Membuat Fungsi Massa (SSF)
+     * Setiap gejala jadi 1 evidence
      */
     public function buildMass(array $rules): array
     {
@@ -14,15 +15,14 @@ class DempsterShaferService
 
         foreach ($rules as $rule) {
 
-            // subset: ['P1'] atau ['P1','P2']
             $subset = $rule['subset'];
             sort($subset);
 
             $key = implode(',', $subset);
             $bobot = (float) $rule['bobot_keyakinan'];
 
-            if ($bobot < 0) {
-                throw new \Exception("Bobot tidak boleh negatif");
+            if ($bobot <= 0) {
+                continue;
             }
 
             if (!isset($mass[$key])) {
@@ -33,33 +33,44 @@ class DempsterShaferService
             $total += $bobot;
         }
 
-        if ($total > 1) {
+        // theta = 1 - total
+        $theta = 1 - $total;
+
+        if ($theta < 0) {
+            // normalisasi
             foreach ($mass as $k => $v) {
                 $mass[$k] = $v / $total;
             }
-            $total = 1;
+            $theta = max(1 - $total, 0.2);
         }
 
-        // Θ (ignorance)
-        $mass['theta'] = 1 - $total;
+        $mass['theta'] = $theta;
 
         return $mass;
     }
 
     /**
-     * INTERSECTION (FULL SUBSET SUPPORT)
+     * Intersection
      */
     private function intersect($a, $b)
     {
-        if ($a === 'theta') return $b;
-        if ($b === 'theta') return $a;
+        if ($a === 'theta') {
+            return $b;
+        }
+        if ($b === 'theta') {
+            return $a;
+        }
 
         $setA = explode(',', $a);
         $setB = explode(',', $b);
 
         $intersect = array_intersect($setA, $setB);
-
-        if (empty($intersect)) return null;
+        if (empty($intersect)) {
+            return null;
+        }
+        // if (empty($intersect)) {
+        //     return 'theta';
+        // }
 
         sort($intersect);
 
@@ -67,7 +78,7 @@ class DempsterShaferService
     }
 
     /**
-     * KOMBINASI DEMPSTER + KONFLIK
+     * Kombinasi 2 Massa (Dempster Rule)
      */
     public function combine(array $m1, array $m2): array
     {
@@ -77,8 +88,17 @@ class DempsterShaferService
         foreach ($m1 as $h1 => $v1) {
             foreach ($m2 as $h2 => $v2) {
 
-                $intersection = $this->intersect($h1, $h2);
                 $nilai = $v1 * $v2;
+                $intersection = $this->intersect($h1, $h2);
+
+                // if ($intersection === null) {
+                //     $intersection = 'theta';
+                // }else {
+                //     if (!isset($result[$intersection])) {
+                //         $result[$intersection] = 0;
+                //     }
+                //     $result[$intersection] += $nilai;
+                // }
 
                 if ($intersection === null) {
                     $conflict += $nilai;
@@ -91,17 +111,31 @@ class DempsterShaferService
             }
         }
 
-        $normalization = 1 - $conflict;
+        // Tambahan
+        if (!isset($result['theta'])) {
+            $result['theta'] = 0;
+        }
 
-        if ($normalization == 0) {
+        // Normalisasi
+        // $normalizer = 1 - $conflict;
+        $normalizer = max(1 - $conflict, 0.0001);
+
+        if ($conflict > 0.9) {
             return [
-                'mass' => ['theta' => 1],
-                'conflict' => 1
+                'mass' => $this->softmaxFallback($m1, $m2),
+                'conflict' => $conflict
             ];
         }
 
+        // if ($normalizer <= 0) {
+        //     return [
+        //         'mass' => ['theta' => 1],
+        //         'conflict' => $conflict
+        //     ];
+        // }
+
         foreach ($result as $k => $v) {
-            $result[$k] = $v / $normalization;
+            $result[$k] = $v / $normalizer;
         }
 
         return [
@@ -111,7 +145,8 @@ class DempsterShaferService
     }
 
     /**
-     * ITERASI MULTI EVIDENCE
+     * Kombinasi Bertahap setelah proses kombinasi 2 massa
+     * m1 ⊕ m2 ⊕ m3 ⊕ ...
      */
     public function calculate(array $evidences): array
     {
@@ -122,54 +157,64 @@ class DempsterShaferService
             ];
         }
 
-        $combined = array_shift($evidences);
+        $currentMass = array_shift($evidences);
         $totalConflict = 0;
 
-        foreach ($evidences as $mass) {
-            $res = $this->combine($combined, $mass);
+        foreach ($evidences as $evidence) {
 
-            $combined = $res['mass'];
-            $totalConflict += $res['conflict'];
+            $res = $this->combine($currentMass, $evidence);
+
+            $currentMass = $res['mass'];
+            $totalConflict = $res['conflict'];
+            // $totalConflict += $res['conflict'];
         }
 
         return [
-            'mass' => $combined,
+            'mass' => $currentMass,
             'conflict' => $totalConflict
         ];
     }
 
+    /**
+     * Belief
+     */
     public function calculateBelief(array $mass): array
-{
-    $belief = [];
+    {
+        $belief = [];
 
-    foreach ($mass as $A => $vA) {
+        foreach ($mass as $A => $vA) {
 
-        if ($A === 'theta') continue;
+            if ($A === 'theta') {
+                continue;
+            }
 
-        $setA = explode(',', $A);
+            $setA = explode(',', $A);
 
-        foreach ($mass as $B => $vB) {
+            foreach ($mass as $B => $vB) {
 
-            if ($B === 'theta') continue;
-
-            $setB = explode(',', $B);
-
-            // cek apakah B subset dari A
-            if (empty(array_diff($setB, $setA))) {
-                if (!isset($belief[$A])) {
-                    $belief[$A] = 0;
+                if ($B === 'theta') {
+                    continue;
                 }
 
-                $belief[$A] += $vB;
+                $setB = explode(',', $B);
+
+                // B ⊆ A
+                if (empty(array_diff($setB, $setA))) {
+
+                    if (!isset($belief[$A])) {
+                        $belief[$A] = 0;
+                    }
+
+                    $belief[$A] += $vB;
+                }
             }
         }
+
+        return $belief;
     }
 
-    return $belief;
-}
-
     /**
-     * PLAUSIBILITY FUNCTION
+     * Plausibility
      */
     public function calculatePlausibility(array $mass): array
     {
@@ -177,7 +222,9 @@ class DempsterShaferService
 
         foreach ($mass as $A => $vA) {
 
-            if ($A === 'theta') continue;
+            if ($A === 'theta') {
+                continue;
+            }
 
             foreach ($mass as $B => $vB) {
 
@@ -200,49 +247,28 @@ class DempsterShaferService
         return $pl;
     }
 
-    /**
-     * MULTI RESULT + THRESHOLD
-     */
-    public function getRanking(array $mass, float $threshold = 0.6): array
+    private function softmaxFallback($m1, $m2)
     {
-        unset($mass['theta']);
+        $combined = [];
 
-        if (empty($mass)) {
-            return [
-                'status' => 'tidak_pasti',
-                'data' => []
-            ];
+        foreach ($m1 as $k => $v) {
+            if ($k !== 'theta') {
+                $combined[$k] = ($combined[$k] ?? 0) + $v;
+            }
         }
 
-        arsort($mass);
-
-        $results = [];
-
-        foreach ($mass as $k => $v) {
-            $results[] = [
-                'penyakit' => $k,
-                'nilai' => $v
-            ];
+        foreach ($m2 as $k => $v) {
+            if ($k !== 'theta') {
+                $combined[$k] = ($combined[$k] ?? 0) + $v;
+            }
         }
 
-        // cek threshold
-        $filtered = array_filter($results, function ($r) use ($threshold) {
-            return $r['nilai'] >= $threshold;
-        });
+        $total = array_sum($combined) ?: 1;
 
-        return [
-            'status' => empty($filtered) ? 'tidak_pasti' : 'ok',
-            'data' => $results
-        ];
-    }
+        foreach ($combined as $k => $v) {
+            $combined[$k] = $v / $total;
+        }
 
-    /**
-     * INTERPRETASI KONFLIK
-     */
-    public function interpretConflict($k)
-    {
-        if ($k < 0.3) return 'rendah';
-        if ($k < 0.7) return 'sedang';
-        return 'tinggi';
+        return $combined;
     }
 }
