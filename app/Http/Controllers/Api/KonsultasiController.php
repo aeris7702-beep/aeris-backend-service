@@ -241,27 +241,27 @@ class KonsultasiController extends Controller
             }
         }
 
-        // try {
-        //     $db->createDocument(
-        //     $databaseId,
-        //     $konsultasiId,
-        //     ID::unique(),
-        //     [
-        //         'pengguna_id' => $request->pengguna_id,
-        //         'gejala_dipilih' => $selectedGejala,
+        try {
+            $db->createDocument(
+            $databaseId,
+            $konsultasiId,
+            ID::unique(),
+            [
+                'pengguna_id' => $request->pengguna_id,
+                'gejala_dipilih' => $selectedGejala,
 
-        //         'hasil_utama' => $namaUtama,
-        //         'persentase_utama' => $persenUtama,
+                'hasil_utama' => $namaUtama,
+                'persentase_utama' => $persenUtama,
 
-        //         'hasil_kedua' => $namaKedua,
-        //         'persentase_kedua' => $persenKedua,
+                'hasil_kedua' => $namaKedua,
+                'persentase_kedua' => $persenKedua,
 
-        //         'conflict' => $conflict,
-        //     ]
-        // );
-        // } catch (\Throwable $e) {
-        //     Log::error("Gagal simpan konsultasi: " . $e->getMessage());
-        // }
+                'conflict' => $conflict,
+            ]
+        );
+        } catch (\Throwable $e) {
+            Log::error("Gagal simpan konsultasi: " . $e->getMessage());
+        }
 
         return response()->json([
          'hasil_utama' => $namaUtama,
