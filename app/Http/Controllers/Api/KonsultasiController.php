@@ -117,6 +117,35 @@ class KonsultasiController extends Controller
         $belief = $this->ds->calculateBelief($finalMass);
         $plausibility = $this->ds->calculatePlausibility($finalMass);
 
+        $allKeys = array_unique(array_merge(
+            array_keys($belief),
+            array_keys($plausibility)
+        ));
+
+        $diagnosisDetail = [];
+
+        foreach ($allKeys as $penyakitId) {
+
+            if ($penyakitId === 'theta') {
+                continue;
+            }
+
+            $bel = $belief[$penyakitId] ?? 0;
+            $pl  = $plausibility[$penyakitId] ?? 0;
+
+            $mid = ($bel + $pl) / 2;
+
+            $diagnosisDetail[$penyakitId] = [
+                'belief' => round($bel * 100, 2),
+                'plausibility' => round($pl * 100, 2),
+                'interval' => [
+                    'min' => round($bel * 100, 2),
+                    'max' => round($pl * 100, 2),
+                ],
+                'score' => round($mid * 100, 2),
+                'interpretasi' => $this->ds->interpretScore($bel, $pl),
+            ];
+        }
         //     if (empty($belief) || max($belief) < 0.2) {
         //     $belief = $this->ds->calculatePlausibility($finalMass);
         // }
@@ -175,30 +204,46 @@ class KonsultasiController extends Controller
 
         // Belief dan plausibiliy Gabungan
         // 4. Urutkan berdasarkan belief
-        $ranking = $finalMass;
-        unset($ranking['theta']);
+        // $ranking = $belief;
+        // if (empty($ranking)) {
+        //     $ranking = $plausibility;
+        // }
+        // unset($ranking['theta']);
+        // arsort($ranking);
+
+        $ranking = [];
+
+        foreach ($diagnosisDetail as $id => $data) {
+            $ranking[$id] = $data['score'];
+        }
+
         arsort($ranking);
 
         $top = array_slice($ranking, 0, 3, true);
 
-        if (max($ranking) == 0) {
-            $ranking = $this->ds->calculatePlausibility($finalMass);
-        }
-
-
-        // $beliefKeys = array_keys($belief);
         $topKeys = array_keys($top);
 
         $utamaId = $topKeys[0] ?? null;
         $keduaId = $topKeys[1] ?? null;
 
+        // $beliefKeys = array_keys($belief);
         // $utamaId = $beliefKeys[0] ?? null;
         // $keduaId = $beliefKeys[1] ?? null;
 
         // 5. Persentase berdasarkan total belief
-        $totalBelief = array_sum($belief) ?: 1;
-        $persenUtama = $utamaId ? round(($belief[$utamaId] / $totalBelief) * 100, 2) : 0;
-        $persenKedua = $keduaId ? round(($belief[$keduaId] / $totalBelief) * 100, 2) : 0;
+        // $totalBelief = array_sum($belief) ?: 1;
+        // $persenUtama = $utamaId ? round(($belief[$utamaId] / $totalBelief) * 100, 2) : 0;
+        // $persenKedua = $keduaId ? round(($belief[$keduaId] / $totalBelief) * 100, 2) : 0;
+
+        $total = array_sum($ranking) ?: 1;
+
+        $persenUtama = $utamaId
+            ? round(($ranking[$utamaId] / $total) * 100, 2)
+            : 0;
+
+        $persenKedua = $keduaId
+            ? round(($ranking[$keduaId] / $total) * 100, 2)
+            : 0;
 
         // Detail Penyakit
         $getDetail = function ($id) use ($db, $databaseId, $penyakitColId) {
@@ -243,10 +288,10 @@ class KonsultasiController extends Controller
 
         try {
             $db->createDocument(
-            $databaseId,
-            $konsultasiId,
-            ID::unique(),
-            [
+                $databaseId,
+                $konsultasiId,
+                ID::unique(),
+                [
                 'pengguna_id' => $request->pengguna_id,
                 'gejala_dipilih' => $selectedGejala,
 
@@ -258,7 +303,7 @@ class KonsultasiController extends Controller
 
                 'conflict' => $conflict,
             ]
-        );
+            );
         } catch (\Throwable $e) {
             Log::error("Gagal simpan konsultasi: " . $e->getMessage());
         }
@@ -270,6 +315,7 @@ class KonsultasiController extends Controller
          'persentase_kedua' => $persenKedua,
          'conflict' => $conflict,
          'detail_penyakit' => $detailPenyakit,
+         'diagnosis_detail' => $diagnosisDetail,
 ]);
     }
 }

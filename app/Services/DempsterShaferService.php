@@ -5,13 +5,14 @@ namespace App\Services;
 class DempsterShaferService
 {
     /**
-     * Membuat Fungsi Massa (SSF)
-     * Setiap gejala jadi 1 evidence
+     * Membuat Fungsi Massa (GMF - General Mass Function)
+     *
      */
+    // Mass Function / BPA
     public function buildMass(array $rules): array
     {
-        $mass = [];
-        $total = 0;
+        $mass = []; // Menyimpan nilai massa tiap subset
+        $total = 0; // Total bobot untuk normalisasi
 
         foreach ($rules as $rule) {
 
@@ -44,6 +45,8 @@ class DempsterShaferService
             $theta = max(1 - $total, 0.2);
         }
 
+
+        // Frame of Discernment (Θ)
         $mass['theta'] = $theta;
 
         return $mass;
@@ -80,6 +83,7 @@ class DempsterShaferService
     /**
      * Kombinasi 2 Massa (Dempster Rule)
      */
+    // Dempster Rule of Combination
     public function combine(array $m1, array $m2): array
     {
         $result = [];
@@ -148,6 +152,7 @@ class DempsterShaferService
      * Kombinasi Bertahap setelah proses kombinasi 2 massa
      * m1 ⊕ m2 ⊕ m3 ⊕ ...
      */
+    // Kombinasi Bertahap (Multiple Evidence)
     public function calculate(array $evidences): array
     {
         if (empty($evidences)) {
@@ -176,8 +181,13 @@ class DempsterShaferService
     }
 
     /**
-     * Belief
+     * Belief (Bel)
+     * Tujuan:
+     * - Mengukur tingkat kepercayaan minimum terhadap suatu hipotesis
+     * Manfaat:
+     * - Memberikan batas bawah keyakinan
      */
+    // Belief (Bel)
     public function calculateBelief(array $mass): array
     {
         $belief = [];
@@ -215,7 +225,12 @@ class DempsterShaferService
 
     /**
      * Plausibility
+     * Tujuan:
+     * - Mengukur kemungkinan maksimum suatu hipotesis
+     * Manfaat:
+     * - Memberikan batas atas keyakinan
      */
+    // Plausibility
     public function calculatePlausibility(array $mass): array
     {
         $pl = [];
@@ -247,10 +262,17 @@ class DempsterShaferService
         return $pl;
     }
 
+    /**
+     * Softmax Fallback
+     * Tujuan:
+     * - Alternatif lain saat konflik terlalu tinggi
+     * Manfaat:
+     * - Menjaga sistem tetap stabil (tidak kolaps)
+     */
     private function softmaxFallback($m1, $m2)
     {
         $combined = [];
-
+        // Menggabungkan semua massa tanpa theta
         foreach ($m1 as $k => $v) {
             if ($k !== 'theta') {
                 $combined[$k] = ($combined[$k] ?? 0) + $v;
@@ -265,10 +287,28 @@ class DempsterShaferService
 
         $total = array_sum($combined) ?: 1;
 
+        // Normalisasi sederhana
         foreach ($combined as $k => $v) {
             $combined[$k] = $v / $total;
         }
 
         return $combined;
+    }
+
+    public function interpretScore(float $bel, float $pl): string
+    {
+        $mid = ($bel + $pl) / 2;
+
+        if ($bel > 0.7) {
+            return 'Sangat Yakin';
+        } elseif ($bel > 0.5) {
+            return 'Yakin';
+        } elseif ($pl > 0.5) {
+            return 'Mungkin';
+        } elseif ($pl > 0.3) {
+            return 'Ragu';
+        } else {
+            return 'Sangat Ragu';
+        }
     }
 }
