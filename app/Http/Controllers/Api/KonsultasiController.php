@@ -48,32 +48,25 @@ class KonsultasiController extends Controller
             // foreach ($request->gejala as $item) {
             $gejalaId   = $item['id'];
             $namaGejala = $item['nama_gejala'];
-
             $selectedGejala[] = $namaGejala;
-
             $response = $db->listDocuments(
                 $databaseId,
                 $basisColId,
                 [Query::equal('gejala', $gejalaId)]
             );
-
             $rules = $response['documents'] ?? [];
 
             if (empty($rules)) {
                 continue;
             }
-
             // mapping ke format DS
             $formattedRules = [];
 
             foreach ($rules as $rule) {
-
                 $penyakitId = $rule['penyakit'] ?? null;
-
                 if (!$penyakitId) {
                     continue;
                 }
-
                 $formattedRules[] = [
                     'subset' => [$penyakitId],
                     'bobot_keyakinan' => (float)$rule['bobot_keyakinan']
@@ -94,45 +87,39 @@ class KonsultasiController extends Controller
         // combine semua evidence
         $result = $this->ds->calculate($evidences);
 
-        // Kondisi Jika Konflik terlalu besar/gejala bertentangan
-        //     if ($result['conflict'] > 0.85) {
-        //     return response()->json([
-        //         'message' => 'Gejala saling bertentangan, hasil diagnosis tidak cukup pasti',
-        //         'conflict' => $result['conflict'],
-        //         'saran' => 'Silakan kurangi atau perbaiki pilihan gejala'
-        //     ], 422);
-        // }
-        // if ($result['conflict'] > 0.85) {
-
-        // return response()->json([
-        //         'message' => 'Gejala tidak konsisten, silakan pilih gejala yang lebih relevan',
-        //         'conflict' => $result['conflict']
-        //     ], 422);
-        // }
-
         $finalMass = $result['mass'];
         $conflict  = $result['conflict'];
 
         // hitung belief
         $belief = $this->ds->calculateBelief($finalMass);
         $plausibility = $this->ds->calculatePlausibility($finalMass);
+        $allKeys = array_unique(array_merge(
+            array_keys($belief),
+            array_keys($plausibility)
+        ));
 
-        //     if (empty($belief) || max($belief) < 0.2) {
-        //     $belief = $this->ds->calculatePlausibility($finalMass);
-        // }
+        $diagnosisDetail = [];
 
-        // $maxBelief = 0;
-        // if (!empty($belief)) {
-        //     $maxBelief = max($belief);
-        // } else {
-        //     $belief = $this->ds->calculatePlausibility($finalMass);
-        //     if (!empty($belief)) {
-        //         $maxBelief = max($belief);
-        //     }
-        // }
+        foreach ($allKeys as $penyakitId) {
+            if ($penyakitId === 'theta') {
+                continue;
+            }
+            $bel = $belief[$penyakitId] ?? 0;
+            $pl  = $plausibility[$penyakitId] ?? 0;
+            $mid = ($bel + $pl) / 2;
+            $diagnosisDetail[$penyakitId] = [
+                'belief' => round($bel * 100, 2),
+                'plausibility' => round($pl * 100, 2),
+                'interval' => [
+                    'min' => round($bel * 100, 2),
+                    'max' => round($pl * 100, 2),
+                ],
+                'score' => round($mid * 100, 2),
+                'interpretasi' => $this->ds->interpretScore($bel, $pl),
+            ];
+        }
 
-
-        $status = 'Normal';
+        // $status = 'Normal';
 
         if ($conflict > 0.8) {
             $status = 'Konflik tinggi - kemungkinan multi penyakit';
@@ -141,64 +128,28 @@ class KonsultasiController extends Controller
         } else {
             $status = 'Diagnosis cukup kuat';
         }
-        // Belief dan Plausibility berbeda
-        // // $penyakitIds = array_keys($belief);
 
-        // // HASIL UTAMA
-        // // $utamaId = $penyakitIds[0] ?? null;
-        // arsort($belief);
-        // $utamaId = array_key_first($belief);
+        $ranking = [];
+        foreach ($diagnosisDetail as $id => $data) {
+            $ranking[$id] = $data['score'];
+        }
 
-        // // HASIL KEDUA
-        // // $keduaId = $penyakitIds[1] ?? null;
-        // unset($plausibility[$utamaId]);
-        // if (!empty($plausibility)) {
-        //     arsort($plausibility);
-        //     $keduaId = array_key_first($plausibility);
-        // } else {
-        //     $keduaId = null;
-        // }
-
-        // // Persentase Perhitungan
-        // // $total = array_sum($belief) ?: 1;
-        // $totalBelief = array_sum($belief) ?: 1;
-        // $totalPl = array_sum($plausibility) ?: 1;
-
-        // $persenUtama = $utamaId
-        //     ? round(($belief[$utamaId] / $totalBelief) * 100, 2)
-        //     : 0;
-
-        // $persenKedua = $keduaId
-        // ? round($plausibility[$keduaId] * 100, 2)
-        // : 0;
-
-
-        // Belief dan plausibiliy Gabungan
-        // 4. Urutkan berdasarkan belief
-        $ranking = $finalMass;
-        unset($ranking['theta']);
         arsort($ranking);
 
         $top = array_slice($ranking, 0, 3, true);
-
-        if (max($ranking) == 0) {
-            $ranking = $this->ds->calculatePlausibility($finalMass);
-        }
-
-
-        // $beliefKeys = array_keys($belief);
         $topKeys = array_keys($top);
-
         $utamaId = $topKeys[0] ?? null;
         $keduaId = $topKeys[1] ?? null;
 
-        // $utamaId = $beliefKeys[0] ?? null;
-        // $keduaId = $beliefKeys[1] ?? null;
+        $total = array_sum($ranking) ?: 1;
 
-        // 5. Persentase berdasarkan total belief
-        $totalBelief = array_sum($belief) ?: 1;
-        $persenUtama = $utamaId ? round(($belief[$utamaId] / $totalBelief) * 100, 2) : 0;
-        $persenKedua = $keduaId ? round(($belief[$keduaId] / $totalBelief) * 100, 2) : 0;
+        $persenUtama = $utamaId
+            ? round(($ranking[$utamaId] / $total) * 100, 2)
+            : 0;
+
+        $persenKedua = $keduaId
+            ? round(($ranking[$keduaId] / $total) * 100, 2)
+            : 0;
 
         // Detail Penyakit
         $getDetail = function ($id) use ($db, $databaseId, $penyakitColId) {
@@ -233,35 +184,42 @@ class KonsultasiController extends Controller
             }
         }
 
+        // Detail penyakit Full
+        // if ($keduaId && $keduaId !== $utamaId) {
+        //     $detail = $getDetail($keduaId);
+        //     if ($detail) {
+        //         $detailPenyakit[$keduaId] = $detail;
+        //         $namaKedua = $detail['nama'];
+        //     }
+        // }
+
+        // Hanya Menampilkan 1 Detail penyakit Saja
         if ($keduaId && $keduaId !== $utamaId) {
             $detail = $getDetail($keduaId);
+
             if ($detail) {
-                $detailPenyakit[$keduaId] = $detail;
                 $namaKedua = $detail['nama'];
             }
         }
 
-        // try {
-        //     $db->createDocument(
-        //     $databaseId,
-        //     $konsultasiId,
-        //     ID::unique(),
-        //     [
-        //         'pengguna_id' => $request->pengguna_id,
-        //         'gejala_dipilih' => $selectedGejala,
-
-        //         'hasil_utama' => $namaUtama,
-        //         'persentase_utama' => $persenUtama,
-
-        //         'hasil_kedua' => $namaKedua,
-        //         'persentase_kedua' => $persenKedua,
-
-        //         'conflict' => $conflict,
-        //     ]
-        // );
-        // } catch (\Throwable $e) {
-        //     Log::error("Gagal simpan konsultasi: " . $e->getMessage());
-        // }
+        try {
+            $db->createDocument(
+                $databaseId,
+                $konsultasiId,
+                ID::unique(),
+                [
+                'pengguna_id' => $request->pengguna_id,
+                'gejala_dipilih' => $selectedGejala,
+                'hasil_utama' => $namaUtama,
+                'persentase_utama' => $persenUtama,
+                'hasil_kedua' => $namaKedua,
+                'persentase_kedua' => $persenKedua,
+                'conflict' => $conflict,
+            ]
+            );
+        } catch (\Throwable $e) {
+            Log::error("Gagal simpan konsultasi: " . $e->getMessage());
+        }
 
         return response()->json([
          'hasil_utama' => $namaUtama,
@@ -270,6 +228,7 @@ class KonsultasiController extends Controller
          'persentase_kedua' => $persenKedua,
          'conflict' => $conflict,
          'detail_penyakit' => $detailPenyakit,
+         'diagnosis_detail' => $diagnosisDetail,
 ]);
     }
 }
